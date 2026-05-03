@@ -518,9 +518,9 @@ pred_end = float(pred["predicted_price"].iloc[-1])
 pred_change_pct = ((pred_end - pred_start) / pred_start * 100) if pred_start else 0
 
 trend_direction = (
-    "meningkat 📈"
+    "menguat 📈"
     if pred_end > pred_start
-    else "menurun 📉"
+    else "melemah 📉"
     if pred_end < pred_start
     else "stabil ➡️"
 )
