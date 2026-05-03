@@ -1,40 +1,36 @@
+import os
 import yfinance as yf
 import pandas as pd
-import os
 
-# =========================
-# FETCH DATA
-# =========================
+
+RAW_DIR = "/opt/airflow/data/raw"
+OUTPUT_PATH = os.path.join(RAW_DIR, "oil.csv")
+
+
 def fetch_oil_price():
-    print("📥 Mengambil data harga minyak (WTI)...")
+    print("Mengambil data harga minyak WTI...")
 
-    # CL=F = Crude Oil (WTI Futures)
     df = yf.download("CL=F", start="2025-01-01", progress=False)
 
     if df.empty:
-        print("❌ Data kosong!")
-        return
+        raise ValueError("Data harga minyak kosong.")
 
-    # ambil kolom close
-    df = df[['Close']].reset_index()
-    df.columns = ['date', 'oil_price']
+    df = df[["Close"]].reset_index()
+    df.columns = ["date", "oil_price"]
 
-    # bersihin
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date')
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
 
-    print(df.head())
+    os.makedirs(RAW_DIR, exist_ok=True)
+    df.to_csv(OUTPUT_PATH, index=False)
 
-    # save
-    output_path = "data/raw/oil.csv"
-    df.to_csv(output_path, index=False)
-
-    print(f"\n💾 Data disimpan ke: {output_path}")
-    print(f"📊 Total data: {len(df)} baris")
+    print(f"Data disimpan ke: {OUTPUT_PATH}")
+    print(f"Total data: {len(df)} baris")
 
 
-# =========================
-# MAIN
-# =========================
-if __name__ == "__main__":
+def main():
     fetch_oil_price()
+
+
+if __name__ == "__main__":
+    main()

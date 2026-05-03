@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+
+  airflow-init:
+    image: apache/airflow:2.10.5-python3.11
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "monitoring_plastik_secret_key_123"
+      _PIP_ADDITIONAL_REQUIREMENTS: pandas requests beautifulsoup4 sqlalchemy psycopg2-binary yfinance
+    volumes:
+      - ../airflow/dags:/opt/airflow/dags
+      - ../scripts:/opt/airflow/scripts
+      - ../data:/opt/airflow/data
+      - ../requirements.txt:/requirements.txt
+    command: >
+      bash -c "airflow db migrate &&
+      airflow users create --username admin --password admin --firstname admin --lastname admin --role Admin --email admin@example.com || true"
+    user: "${AIRFLOW_UID:-50000}:0"
+
+  airflow-webserver:
+    image: apache/airflow:2.10.5-python3.11
+    command: webserver
+    depends_on:
+      - airflow-init
+      - postgres
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "monitoring_plastik_secret_key_123"
+      _PIP_ADDITIONAL_REQUIREMENTS: pandas numpy requests beautifulsoup4 sqlalchemy psycopg2-binary yfinance scikit-learn
+    volumes:
+      - ../airflow/dags:/opt/airflow/dags
+      - ../scripts:/opt/airflow/scripts
+      - ../data:/opt/airflow/data
+      - ../requirements.txt:/requirements.txt
+    ports:
+      - "8180:8080"
+    user: "${AIRFLOW_UID:-50000}:0"
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.5-python3.11
+    command: scheduler
+    depends_on:
+      - airflow-init
+      - postgres
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "monitoring_plastik_secret_key_123"
+      _PIP_ADDITIONAL_REQUIREMENTS: pandas requests beautifulsoup4 sqlalchemy psycopg2-binary yfinance
+    volumes:
+      - ../airflow/dags:/opt/airflow/dags
+      - ../scripts:/opt/airflow/scripts
+      - ../data:/opt/airflow/data
+      - ../requirements.txt:/requirements.txt
+    user: "${AIRFLOW_UID:-50000}:0"
+
+
+  metabase:
+    image: metabase/metabase:latest
+    container_name: metabase-plastic
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres-db-volume:

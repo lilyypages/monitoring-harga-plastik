@@ -1,256 +1,97 @@
-
 """
-================================================================
-  Scraper Harga Plastik (Polyethylene) — CLEAN VERSION
-================================================================
+=========================================================
+Scraper Harga Plastik / Resin Plastik
+Source: FRED - Producer Price Index: Plastics Material and Resin Manufacturing
+Output: /opt/airflow/data/raw/plastic.csv
+=========================================================
 """
 
 import os
-import time
-import json
 import logging
-import requests
+from datetime import datetime
+
 import pandas as pd
 
-from datetime import datetime
-from bs4 import BeautifulSoup
 
-# ── CONFIG ─────────────────────────────────────────────────────
-SAVE_DIR = r"D:\IPBD\Project-Pipeline-EndToEnd\data\raw"
-URL = "https://tradingeconomics.com/commodity/polyethylene"
+# =========================
+# CONFIG
+# =========================
+SAVE_DIR = os.getenv("SAVE_DIR", "/opt/airflow/data/raw")
+OUTPUT_FILE = "plastic.csv"
+OUTPUT_PATH = os.path.join(SAVE_DIR, OUTPUT_FILE)
 
-os.makedirs(SAVE_DIR, exist_ok=True)
+FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=PCU325211325211"
+VALUE_COL = "PCU325211325211"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-
-# ================================================================
-# UTIL
-# ================================================================
-def ts_to_date(ts):
-    return datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
-def setup_driver(headless=True):
-    from selenium import webdriver
-    from selenium.webdriver.firefox.options import Options
-    from selenium.webdriver.firefox.service import Service
-    from webdriver_manager.firefox import GeckoDriverManager
-
-    opts = Options()
-    if headless:
-        opts.add_argument("--headless")
-
-    opts.set_preference("dom.webnotifications.enabled", False)
-
-    service = Service(GeckoDriverManager().install())
-    return webdriver.Firefox(service=service, options=opts)
-
-
-# ================================================================
-# METHOD 1 — Highcharts (BEST)
-# ================================================================
-def scrape_highcharts():
-    from selenium.webdriver.support.ui import WebDriverWait
-
-    logging.info("[Highcharts] Start scraping...")
-
-    driver = setup_driver()
+# =========================
+# SCRAPER
+# =========================
+def fetch_plastic_price():
+    logging.info("Mengambil data Plastic Material and Resin Price Index dari FRED...")
 
     try:
-        driver.get(URL)
+        df = pd.read_csv(FRED_URL)
 
-        # tunggu Highcharts muncul
-        WebDriverWait(driver, 15).until(
-            lambda d: d.execute_script("return typeof Highcharts !== 'undefined'")
+        if df.empty:
+            raise ValueError("Data dari FRED kosong.")
+
+        if VALUE_COL not in df.columns:
+            raise ValueError(f"Kolom {VALUE_COL} tidak ditemukan. Kolom tersedia: {df.columns.tolist()}")
+
+        # Bersihkan missing value dari FRED
+        df = df[df[VALUE_COL] != "."].copy()
+        df[VALUE_COL] = pd.to_numeric(df[VALUE_COL], errors="coerce")
+        df = df.dropna(subset=[VALUE_COL])
+
+        if df.empty:
+            raise ValueError("Tidak ada data valid setelah cleaning.")
+
+        # Rename agar konsisten untuk pipeline
+        df = df.rename(
+            columns={
+                "observation_date": "date",
+                VALUE_COL: "plastic_price"
+            }
         )
 
-        js = """
-        var chart = Highcharts.charts[0];
-        if (!chart) return null;
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
 
-        var s = chart.series[0];
+        # Metadata
+        df["satuan"] = "PPI Index"
+        df["sumber"] = "FRED"
+        df["metode"] = "csv_api"
+        df["scraped_at"] = datetime.now()
 
-        return JSON.stringify({
-            data: s.options.data || [],
-            x: s.processedXData || [],
-            y: s.processedYData || [],
-            name: s.name
-        });
-        """
+        # Simpan ke folder raw
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        df.to_csv(OUTPUT_PATH, index=False, encoding="utf-8-sig")
 
-        result = driver.execute_script(js)
+        logging.info("======================================")
+        logging.info(f"SAVED CSV : {OUTPUT_PATH}")
+        logging.info(f"ROWS      : {len(df)}")
+        logging.info("======================================")
 
-        if not result:
-            return None
-
-        obj = json.loads(result)
-
-        records = []
-
-        # format 1
-        if obj["data"] and isinstance(obj["data"][0], list):
-            for pt in obj["data"]:
-                records.append({
-                    "date": ts_to_date(pt[0]),
-                    "plastic_price": pt[1],
-                })
-
-        # format 2
-        elif obj["x"] and obj["y"]:
-            for x, y in zip(obj["x"], obj["y"]):
-                records.append({
-                    "date": ts_to_date(x),
-                    "plastic_price": y,
-                })
-
-        if records:
-            df = pd.DataFrame(records)
-            df["satuan"] = "CNY/T"
-            df["sumber"] = "TradingEconomics"
-            df["metode"] = "highcharts"
-            logging.info(f"[Highcharts] SUCCESS {len(df)} rows")
-            return df
+        return df
 
     except Exception as e:
-        logging.error(f"[Highcharts] Error: {e}")
-
-    finally:
-        driver.quit()
-
-    return None
+        logging.error(f"Gagal mengambil data plastik: {e}")
+        raise
 
 
-# ================================================================
-# METHOD 2 — XHR REQUEST
-# ================================================================
-def scrape_xhr():
-    logging.info("[XHR] Start scraping...")
-
-    driver = setup_driver()
-
-    try:
-        driver.get(URL)
-        time.sleep(5)
-
-        js = """
-        return performance.getEntries().map(e => e.name)
-        """
-
-        urls = driver.execute_script(js)
-        cookies = {c['name']: c['value'] for c in driver.get_cookies()}
-
-        driver.quit()
-
-        for u in urls:
-            if "chart" in u.lower():
-                try:
-                    r = requests.get(u, cookies=cookies, timeout=10)
-                    data = r.json()
-
-                    if isinstance(data, list):
-                        records = []
-                        for pt in data:
-                            records.append({
-                                "date": ts_to_date(pt[0]),
-                                "plastic_price": pt[1],
-                                "satuan": "CNY/T",
-                                "sumber": "TradingEconomics",
-                                "metode": "xhr"
-                            })
-
-                        if records:
-                            logging.info(f"[XHR] SUCCESS {len(records)} rows")
-                            return pd.DataFrame(records)
-
-                except Exception as e:
-                    logging.warning(f"[XHR] Skip URL: {e}")
-
-    except Exception as e:
-        logging.error(f"[XHR] Error: {e}")
-
-    return None
-
-
-# ================================================================
-# METHOD 3 — HTML (LAST RESORT)
-# ================================================================
-def scrape_html():
-    logging.info("[HTML] Fallback scraping...")
-
-    try:
-        r = requests.get(URL, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        h2 = soup.find("h2")
-        if not h2:
-            return None
-
-        text = h2.get_text()
-
-        import re
-        num = re.findall(r'\d+\.?\d*', text)
-
-        if num:
-            df = pd.DataFrame([{
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "plastic_price": float(num[0]),
-                "satuan": "CNY/T",
-                "sumber": "TradingEconomics",
-                "metode": "html"
-            }])
-            logging.info("[HTML] SUCCESS")
-            return df
-
-    except Exception as e:
-        logging.error(f"[HTML] Error: {e}")
-
-    return None
-
-
-# ================================================================
-# SAVE
-# ================================================================
-def save_data(df):
-
-    f_csv = os.path.join(SAVE_DIR, f"polyethylene.csv")
-    f_json = os.path.join(SAVE_DIR, f"polyethylene.json")
-
-    df.to_csv(f_csv, index=False, encoding="utf-8-sig")
-    df.to_json(f_json, orient="records", indent=2)
-
-    logging.info("======================================")
-    logging.info(f"SAVED CSV  : {f_csv}")
-    logging.info(f"SAVED JSON : {f_json}")
-    logging.info(f"ROWS       : {len(df)}")
-    logging.info("======================================")
-
-
-# ================================================================
+# =========================
 # MAIN
-# ================================================================
+# =========================
 def main():
-    logging.info("START SCRAPING...")
-
-    df = scrape_highcharts()
-
-    if df is None:
-        df = scrape_xhr()
-
-    if df is None:
-        df = scrape_html()
-
-    if df is None:
-        logging.warning("All methods failed. Using dummy data.")
-        df = pd.DataFrame([{
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "plastic_price": 8887,
-            "satuan": "CNY/T",
-            "sumber": "dummy",
-            "metode": "manual"
-        }])
-
-    save_data(df)
+    logging.info("START SCRAPING PLASTIC DATA...")
+    fetch_plastic_price()
+    logging.info("FINISH SCRAPING PLASTIC DATA.")
 
 
 if __name__ == "__main__":

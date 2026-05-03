@@ -20,9 +20,6 @@ from processing.feature import main as feature_engineering
 # database
 from db.load import main as load_to_db
 
-# machine learning / forecasting
-from ml.predict import main as predict_plastic_price
-
 
 default_args = {
     "owner": "talitha",
@@ -34,15 +31,12 @@ default_args = {
 
 with DAG(
     dag_id="commodity_pipeline",
-    description=(
-        "Pipeline monitoring harga plastik, harga minyak, kurs USD/IDR, "
-        "feature engineering, load ke PostgreSQL, dan prediksi harga plastik."
-    ),
+    description="Pipeline monitoring harga plastik, minyak, kurs USD, processing data, dan load ke PostgreSQL",
     default_args=default_args,
     start_date=datetime(2025, 1, 1),
     schedule="@daily",
     catchup=False,
-    tags=["commodity", "plastic", "airflow", "forecasting"],
+    tags=["commodity", "plastic", "airflow"],
 ) as dag:
 
     scrape_plastic_task = PythonOperator(
@@ -80,11 +74,5 @@ with DAG(
         python_callable=load_to_db,
     )
 
-    predict_plastic_price_task = PythonOperator(
-        task_id="predict_plastic_price",
-        python_callable=predict_plastic_price,
-    )
-
     [scrape_plastic_task, scrape_oil_task, scrape_usd_task] >> clean_data_task
-    clean_data_task >> merge_data_task >> feature_engineering_task
-    feature_engineering_task >> load_to_postgres_task >> predict_plastic_price_task
+    clean_data_task >> merge_data_task >> feature_engineering_task >> load_to_postgres_task
