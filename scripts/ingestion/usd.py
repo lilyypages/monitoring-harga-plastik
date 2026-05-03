@@ -1,75 +1,121 @@
-import yfinance as yf
-import pandas as pd
+"""
+=========================================================
+Scraper Harga Plastik / Resin Plastik
+Source: FRED - Producer Price Index: Plastics Material and Resin Manufacturing
+Output: /opt/airflow/data/raw/plastic.csv
+Filter: 1 tahun terakhir
+=========================================================
+"""
+
 import os
-import requests
+import logging
+from datetime import datetime
+
+import pandas as pd
 
 
 # =========================
-# 1. YAHOO FINANCE
+# CONFIG
 # =========================
-def get_usd_yahoo():
-    print("📥 Ambil USD/IDR dari Yahoo Finance...")
+SAVE_DIR = os.getenv("SAVE_DIR", "/opt/airflow/data/raw")
+OUTPUT_FILE = "plastic.csv"
+OUTPUT_PATH = os.path.join(SAVE_DIR, OUTPUT_FILE)
 
-    df = yf.download("USDIDR=X", start="2025-01-01", progress=False)
+FRED_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=PCU325211325211"
+VALUE_COL = "PCU325211325211"
 
-    if df.empty:
-        print("❌ Yahoo gagal")
-        return None
+# Ambil hanya 1 tahun terakhir
+LOOKBACK_YEARS = 1
 
-    df = df[['Close']].reset_index()
-    df.columns = ['date', 'usd_idr']
-
-    return df
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 # =========================
-# 2. BANK INDONESIA (fallback sederhana)
+# SCRAPER
 # =========================
-def get_usd_bi():
-    print("📥 Ambil USD/IDR dari Bank Indonesia (fallback)...")
+def fetch_plastic_price():
+    logging.info("Mengambil data Plastic Material and Resin Price Index dari FRED...")
 
     try:
-        url = "https://api.exchangerate.host/timeseries?start_date=2025-01-01&end_date=2026-05-01&base=USD&symbols=IDR"
-        res = requests.get(url).json()
+        df = pd.read_csv(FRED_URL)
 
-        data = []
-        for date, val in res['rates'].items():
-            data.append({
-                "date": date,
-                "usd_idr": val['IDR']
-            })
+        if df.empty:
+            raise ValueError("Data dari FRED kosong.")
 
-        df = pd.DataFrame(data)
-        df['date'] = pd.to_datetime(df['date'])
+        if VALUE_COL not in df.columns:
+            raise ValueError(
+                f"Kolom {VALUE_COL} tidak ditemukan. "
+                f"Kolom tersedia: {df.columns.tolist()}"
+            )
+
+        # Rename kolom agar konsisten
+        df = df.rename(
+            columns={
+                "observation_date": "date",
+                VALUE_COL: "plastic_price"
+            }
+        )
+
+        # Bersihkan tanggal
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])
+
+        # Bersihkan missing value dari FRED
+        df = df[df["plastic_price"] != "."].copy()
+        df["plastic_price"] = pd.to_numeric(df["plastic_price"], errors="coerce")
+        df = df.dropna(subset=["plastic_price"])
+
+        if df.empty:
+            raise ValueError("Tidak ada data valid setelah cleaning.")
+
+        # Sort data
+        df = df.sort_values("date")
+
+        # =========================
+        # FILTER 1 TAHUN TERAKHIR
+        # =========================
+        max_date = df["date"].max()
+        start_date = max_date - pd.DateOffset(years=LOOKBACK_YEARS)
+
+        df = df[df["date"] >= start_date].copy()
+
+        if df.empty:
+            raise ValueError("Data kosong setelah filter 1 tahun terakhir.")
+
+        # Metadata
+        df["satuan"] = "PPI Index"
+        df["sumber"] = "FRED"
+        df["metode"] = "csv_api"
+        df["scraped_at"] = datetime.now()
+
+        # Simpan ke folder raw
+        os.makedirs(SAVE_DIR, exist_ok=True)
+        df.to_csv(OUTPUT_PATH, index=False, encoding="utf-8-sig")
+
+        logging.info("======================================")
+        logging.info(f"SAVED CSV     : {OUTPUT_PATH}")
+        logging.info(f"ROWS          : {len(df)}")
+        logging.info(f"START DATE    : {df['date'].min().date()}")
+        logging.info(f"END DATE      : {df['date'].max().date()}")
+        logging.info("======================================")
 
         return df
 
     except Exception as e:
-        print("❌ BI fallback gagal:", e)
-        return None
+        logging.error(f"Gagal mengambil data plastik: {e}")
+        raise
 
 
 # =========================
-# MAIN PIPELINE
+# MAIN
 # =========================
 def main():
-    df = get_usd_yahoo()
-
-    if df is None:
-        df = get_usd_bi()
-
-    if df is None:
-        print("❌ Semua sumber gagal")
-        return
-
-    df = df.sort_values("date")
-
-    output_path = "data/raw/usd_idr.csv"
-    df.to_csv(output_path, index=False)
-
-    print(f"\n💾 Data disimpan: {output_path}")
-    print(f"📊 Total data: {len(df)} baris")
-    print(df.head())
+    logging.info("START SCRAPING PLASTIC DATA...")
+    fetch_plastic_price()
+    logging.info("FINISH SCRAPING PLASTIC DATA.")
 
 
 if __name__ == "__main__":
